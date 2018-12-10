@@ -1,4 +1,4 @@
-原文地址: [http://accumulo.apache.org/1.9/accumulo_user_manual.html#_writing_accumulo_clients](http://accumulo.apache.org/1.9/accumulo_user_manual.html#_writing_accumulo_clients)
+原文地址: [http://accumulo.apache.org/1.7/accumulo_user_manual.html](http://accumulo.apache.org/1.7/accumulo_user_manual.html)
 ## 4. Writing Accumulo Clients
 ### 4.1. Running Clinet Code
 有3种方式来运行使用Accumulo提供的API开发的Accumulo客户端：
@@ -228,5 +228,151 @@ Connector conn = instance.getConnector("root", new PasswordToken("password"));
 ```
 accumulo.stop();
 ```
+## Appendix: 权限控制
+[https://accumulo.apache.org/1.7/examples/visibility](https://accumulo.apache.org/1.7/examples/visibility)
+#### 用户权限
+1. 首先我们先创建一个用户
+```bash
+root@accumulo[instance]> createuser hwang
+2018-12-10 10:36:33,722 [Shell.audit] INFO : root@accumulo> createuser hwang
+Enter new password for 'hwang': ********
+Please confirm new password for 'hwang': ********
+```
+2. 切换到hwang用户，然后创建一个表
+```bash
+root@accumulo> user hwang
+2018-12-10 10:37:59,385 [Shell.audit] INFO : root@accumulo> user hwang
+Enter password for user hwang: ********
+hwang@accumulo> create
+createnamespace   createtable       createuser
+hwang@accumulo> createtable test
+2018-12-10 10:38:11,687 [Shell.audit] INFO : hwang@accumulo> createtable test
+2018-12-10 10:38:11,758 [shell.Shell] ERROR: org.apache.accumulo.core.client.AccumuloSecurityException: Error PERMISSION_DENIED for user hwang on table test(?) - User does not have permission to perform this action
+```
+提示我们没有这个权限去创建，对于Accumulo来说，用户默认是没有创建表的权限的，所以我们就要进行授权
+#### 授权
+1. 授权必须在root账户下进行。
+```bash
+hwang@accumulo> user root
+2018-12-10 10:39:51,260 [Shell.audit] INFO : hwang@accumulo> user root
+Enter password for user root: *****
+root@accumulo> grant -s System.
+System.ALTER_NAMESPACE           System.ALTER_TABLE               System.ALTER_USER
+System.CREATE_NAMESPACE          System.CREATE_TABLE              System.CREATE_USER
+System.DROP_NAMESPACE            System.DROP_TABLE                System.DROP_USER
+System.GRANT                     System.OBTAIN_DELEGATION_TOKEN   System.SYSTEM
+root@accumulo> grant -s System.CREATE_TABLE -u hwang
+2018-12-10 10:40:09,700 [Shell.audit] INFO : root@accumulo> grant -s System.CREATE_TABLE -u hwang
+root@accumulo> createtable test
+2018-12-10 10:40:17,069 [Shell.audit] INFO : root@accumulo> createtable test
+root@accumulo test> user hwang
+2018-12-10 10:41:05,779 [Shell.audit] INFO : root@accumulo test> user hwang
+Enter password for user hwang: ********
+hwang@accumulo test> userpermissions
+2018-12-10 10:41:10,866 [Shell.audit] INFO : hwang@accumulo test> userpermissions
+System permissions: System.CREATE_TABLE
+Namespace permissions (accumulo): Namespace.READ
+Table permissions (accumulo.metadata): Table.READ
+Table permissions (accumulo.replication): Table.READ
+Table permissions (accumulo.root): Table.READ
+```
+可以看到在我们创建用户的时候，用户已经有了读的权限，然后我们增加了一个创建表的权限。
 
+#### 可视性
+1. 英文中是visibilitiy，我简单翻译为可视性，Accumulo中可以对每一条记录进行控制，只有拥有响应的认证（Authorization）才可以看到。
+2. Visibilitiy和Authorization，我觉得是一个概念，只是Visibilitiy针对的是数据，Authorization针对的是用户，当我们插入数据时，
+我们可以用Visibilitiy，当我们读数据时我们的用户需要对应的Authorization
+3. 实际上Authorization或者Visibilitiy就是一些&和|组成的表达式，比如“A|B”或者"(A|B)&C"
+4. 我们插入几条数据
+```bash
+hwang@accumulo test> user root
+2018-12-10 11:01:56,121 [Shell.audit] INFO : hwang@accumulo test> user root
+Enter password for user root: *****
+root@accumulo test> grant -s Table.WRITE -u hwang
+2018-12-10 11:01:58,985 [Shell.audit] INFO : root@accumulo test> grant -s Table.WRITE -u hwang
+root@accumulo test> user hwang
+2018-12-10 11:02:03,320 [Shell.audit] INFO : root@accumulo test> user hwang
+Enter password for user hwang: ********
+hwang@accumulo test> insert row f1 q1 v1 -l A
+2018-12-10 11:02:09,280 [Shell.audit] INFO : hwang@accumulo test> insert row f1 q1 v1 -l A
+hwang@accumulo test> insert row f2 q2 v2 -l A&B
+2018-12-10 11:02:44,759 [Shell.audit] INFO : hwang@accumulo test> insert row f2 q2 v2 -l A&B
+hwang@accumulo test> insert row f3 q3 v3 -l apple&carrot|broccoli|spinach
+2018-12-10 11:03:04,912 [Shell.audit] INFO : hwang@accumulo test> insert row f3 q3 v3 -l apple&carrot|broccoli|spinach
+2018-12-10 11:03:04,912 [shell.Shell] ERROR: org.apache.accumulo.core.util.BadArgumentException: cannot mix | and & near index 12
+apple&carrot|broccoli|spinach
+            ^
+hwang@accumulo test> insert row f3 q3 v3 -l (apple&carrot)|broccoli|spinach
+2018-12-10 11:03:13,692 [Shell.audit] INFO : hwang@accumulo test> insert row f3 q3 v3 -l (apple&carrot)|broccoli|spinach
+```
+这里要注意的是在|和&混用的时候必须用括号指定优先级。
+可以看到我们这里插入了一行数据，然后有三个族，分别有这不同的可视性，然后我们分别用不同的认证来读取下数据。
+#### 读取数据
+```bash
+hwang@accumulo test> scan
+2018-12-10 11:14:21,078 [Shell.audit] INFO : hwang@accumulo test> scan
+2018-12-10 11:14:21,107 [shell.Shell] ERROR: java.lang.RuntimeException: org.apache.accumulo.core.client.AccumuloSecurityException: Error PERMISSION_DENIED for user hwang on table test(ID:k) - User does not have permission to perform this action
+```
+1. 可以看到用户目前没有授权，无法完成操作，并且用户默认是空授权，那么我们上面插入的是三条记录，都是有需要授权的，所以这里结果是空。
+2. 接下来我们给用户授权
+#### 给用户授权
+```bash
+hwang@accumulo test> setauths -s A
+2018-12-10 11:15:45,514 [Shell.audit] INFO : hwang@accumulo test> setauths -s A
+2018-12-10 11:15:45,526 [shell.Shell] ERROR: org.apache.accumulo.core.client.AccumuloSecurityException: Error PERMISSION_DENIED for user hwang - User does not have permission to perform this action
+```
+1. 可以看到用户默认情况下是没有权限的，必须要有System.ALTER_USER这个权限才可以，root用户默认是有的。
+```bash
 
+hwang@accumulo test> user root
+2018-12-10 11:25:39,781 [Shell.audit] INFO : hwang@accumulo test> user root
+Enter password for user root: *****
+root@accumulo test> grant -s Table.READ -u hwang
+2018-12-10 11:25:48,474 [Shell.audit] INFO : root@accumulo test> grant -s Table.READ -u hwang
+root@accumulo test> setauths -s A -u hwang
+2018-12-10 11:26:02,642 [Shell.audit] INFO : root@accumulo test> setauths -s A -u hwang
+```
+2. 上面我们给hwang用户授权了A，我们在读取下数据
+```bash
+hwang@accumulo test> scan -s A
+2018-12-10 11:27:28,398 [Shell.audit] INFO : hwang@accumulo test> scan -s A
+row f1:q1 [A]    v1
+```
+可以看到，我们将row f1 q1 v1这条数据读了出来
+3. 
+```bash
+hwang@accumulo test> user root
+2018-12-10 11:28:28,303 [Shell.audit] INFO : hwang@accumulo test> user root
+Enter password for user root: *****
+root@accumulo test> setauths -s A,B,broccoli -u hwang
+2018-12-10 11:28:38,557 [Shell.audit] INFO : root@accumulo test> setauths -s A,B,broccoli -u hwang
+hwang@accumulo test> scan
+
+2018-12-10 11:29:05,045 [Shell.audit] INFO : hwang@accumulo test> scan
+row f1:q1 [A]    v1
+row f2:q2 [A&B]    v2
+row f3:q3 [(apple&carrot)|broccoli|spinach]    v3
+```
+4. 上面我们都是在针对读取数据的授权，Accumulo也允许进行写数据的授权设置，比如我们这里设置为
+必须要是这些表已经有的可视权限。
+```bash
+2018-12-10 11:31:45,569 [Shell.audit] INFO : hwang@accumulo test> user root
+Enter password for user root: *****
+root@accumulo test> config -t test -s table.constraint.1=org.apache.accumulo.core.security.VisibilityConstraint
+2018-12-10 11:31:58,880 [Shell.audit] INFO : root@accumulo test> config -t test -s table.constraint.1=org.apache.accumulo.core.security.VisibilityConstraint
+root@accumulo test> user hwang
+2018-12-10 11:32:09,072 [Shell.audit] INFO : root@accumulo test> user hwang
+Enter password for user hwang: ********
+hwang@accumulo test> insert row f4 q4 v4 -l spinach
+2018-12-10 11:32:24,344 [Shell.audit] INFO : hwang@accumulo test> insert row f4 q4 v4 -l spinach
+    Constraint Failures:
+        ConstraintViolationSummary(constrainClass:org.apache.accumulo.core.security.VisibilityConstraint, violationCode:2, violationDescription:User does not have authorization on column visibility, numberOfViolatingMutations:1)
+hwang@accumulo test> insert row f4 q4 v4 -l spinach|broccoli
+2018-12-10 11:33:00,623 [Shell.audit] INFO : hwang@accumulo test> insert row f4 q4 v4 -l spinach|broccoli
+hwang@accumulo test> scan
+2018-12-10 11:33:01,903 [Shell.audit] INFO : hwang@accumulo test> scan
+row f1:q1 [A]    v1
+row f2:q2 [A&B]    v2
+row f3:q3 [(apple&carrot)|broccoli|spinach]    v3
+row f4:q4 [spinach|broccoli]    v4
+```
